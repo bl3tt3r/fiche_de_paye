@@ -1,37 +1,68 @@
 use duct::cmd;
+use serde::Deserialize;
 
 pub struct Claude;
 
+#[derive(Deserialize, Debug)]
+pub struct ClaudeResponse {
+    pub r#type: String,
+    pub subtype: String,
+    pub is_error: bool,
+    pub api_error_status: Option<String>,
+    pub duration_ms: i32,
+    pub duration_api_ms: i32,
+    pub ttft_ms: i32,
+    pub ttft_stream_ms: i32,
+    pub time_to_request_ms: i32,
+    pub num_turns: i32,
+    pub result: String,
+}
+
 impl Claude {
     pub fn installed(&self) -> bool {
-        let (code, _stdout, _stderr) = exec("claude --version");
+        let (code, _stdout, _stderr) = exec(vec!["--version"]);
         code == 0
     }
 
     pub fn connected(&self) -> bool {
-        let (code, stdout, _stderr) = exec("claude auth status");
+        let (code, stdout, _stderr) = exec(vec!["auth", "status"]);
         code == 0 && stdout.contains("\"loggedIn\": true")
     }
 
     pub fn prompt(
         &self,
         system_prompt: &'static str,
-        user_prompt: &'static str,
-    ) -> (i32, String, String) {
-        exec(&format!(
-            "claude -p --system-prompt {} --allowedTools Read --output-format json {}",
-            system_prompt, user_prompt
-        ))
+        user_prompt: &str,
+    ) -> Result<ClaudeResponse, String> {
+        let (code, stdout, stderr) = exec(vec![
+            "-p",
+            "--system-prompt",
+            system_prompt,
+            "--allowedTools",
+            "Read",
+            "--output-format",
+            "json",
+            user_prompt,
+        ]);
+
+        if code != 0 {
+            return Err(stderr.clone());
+        }
+
+        Ok(
+            serde_json::from_str::<ClaudeResponse>(&stdout).map_err(|error| {
+                let msg = "Lecture de la réponse de claude code.";
+                tracing::error!(cauded = %error,  msg);
+                msg
+            })?,
+        )
     }
 }
 
-fn exec(command: &str) -> (i32, String, String) {
-    let process = {
-        let mut parts = command.split_whitespace();
-        let program = parts.next().unwrap_or_default().to_string();
-        let args: Vec<String> = parts.map(|m| m.to_string()).collect();
-        cmd(program, args).stdout_capture().stderr_capture()
-    };
+fn exec(args: Vec<&str>) -> (i32, String, String) {
+    let process = cmd("claude", args.clone())
+        .stdout_capture()
+        .stderr_capture();
     let result = process.run();
     match result {
         Ok(result) => (
@@ -41,7 +72,7 @@ fn exec(command: &str) -> (i32, String, String) {
         ),
         Err(error) => {
             let msg = "Execution d'une commande.";
-            tracing::warn!(cauded = %error, command , msg);
+            tracing::warn!(cauded = %error, command = format!("claude {}", args.join(" ")),  msg);
             (-1, "".to_string(), "".to_string())
         }
     }

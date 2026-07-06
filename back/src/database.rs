@@ -80,7 +80,7 @@ where
     /// employes.add("42", "Alice Dupont".to_string())?;
     /// # Ok::<(), &'static str>(())
     /// ```
-    pub fn add(&mut self, key: &str, value: T) -> Result<(), &'static str> {
+    pub fn add(&self, key: &str, value: T) -> Result<(), &'static str> {
         let transaction = self.db.begin_write().map_err(|error| {
             let msg = "Ouverture d'une transaction en ecrite.";
             tracing::error!(cauded = %error, database = self.name,  key, msg);
