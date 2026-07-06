@@ -1,0 +1,127 @@
+use crate::services::console::{execute, is_commande_succed};
+use rocket::{info, warn};
+use serde_json::Value;
+
+const SYSTEM_PROMPT_TEMPLATE: &str = r#"
+Tu es un assistant IA intégré à une application de gestion de fiches de paie.
+
+MISSION
+On te fournit le chemin d'un fichier PDF représentant une fiche de paie. Tu dois le lire et en extraire les données sous forme structurée.
+
+FORMAT DE RÉPONSE
+Tu réponds UNIQUEMENT avec un objet JSON valide, sans texte avant ni après, sans balises markdown (pas de ```json```). Le JSON doit respecter exactement ce schéma :
+
+{
+  "infos": { "<clé>": "<valeur>" },
+  "datas": { "<clé>": "<valeur>" },
+  "description": { "<clé>": "<définition>" }
+}
+
+RÈGLES PAR SECTION
+1. "infos" — Date de début/fin de période, employeur, salarié, poste, etc.
+2. "datas" — Clé -> valeur pour chaque ligne de calcul. Préfixe la valeur d'un "-" si c'est une charge/déduction.
+3. "description" — Voici la liste des concepts déjà connus de notre système :
+<concepts_connus>
+{{CONCEPTS_CONNUS}}
+</concepts_connus>
+Ajoute une définition UNIQUEMENT pour les clés de "datas" absentes de cette liste. Si toutes sont connues, renvoie {}.
+
+NOMMAGE DES CLÉS
+Toutes les clés doivent être en français, en snake_case, sans accents, cohérentes avec le format de <concepts_connus>.
+
+CONTRAINTES GÉNÉRALES
+- N'invente aucune donnée absente du document.
+- Ignore les données illisibles ou ambiguës.
+- Traite toutes les pages du PDF.
+- Décimales avec un point ".".
+- Aucun commentaire, uniquement le JSON.
+"#;
+
+#[derive(Default)]
+pub struct Claude {}
+
+impl Claude {
+    pub async fn available(&self) -> bool {
+        if is_commande_succed("claude", vec!["--version"]).await {
+            info!("Le cli de claude code est bien installé.");
+            true
+        } else {
+            warn!("Le cli de claude code n'est pas installé.");
+            false
+        }
+    }
+
+    pub async fn connected(&self) -> bool {
+        if let Ok(response) = execute("claude", vec!["auth", "status"]).await
+            && response.status.success()
+            && String::from_utf8_lossy(&response.stdout)
+                .to_string()
+                .contains("\"loggedIn\": true")
+        {
+            info!("Le cli de claude code est bien configuré avec un compte.");
+            true
+        } else {
+            warn!("Le cli de claude code n'est pas bien configuré avec un compte.");
+            false
+        }
+    }
+
+    fn build_system_prompt(&self, concepts_connus: &[String]) -> String {
+        let concepts_json =
+            serde_json::to_string(concepts_connus).unwrap_or_else(|_| "[]".to_string());
+        SYSTEM_PROMPT_TEMPLATE.replace("{{CONCEPTS_CONNUS}}", &concepts_json)
+    }
+
+    pub async fn analyse(&self, pdf_path: &str, concepts_connus: &[String]) -> String {
+        let system_prompt = self.build_system_prompt(concepts_connus);
+        let user_prompt = format!(
+            "Lis le fichier {pdf_path} et renvoie uniquement le JSON demandé, rien d'autre."
+        );
+
+        let args = vec![
+            "-p",
+            "--system-prompt",
+            system_prompt.as_str(),
+            "--allowedTools",
+            "Read",
+            "--output-format",
+            "json",
+            user_prompt.as_str(),
+        ];
+
+        let response = match execute("claude", args).await {
+            Ok(response) => response,
+            Err(err) => {
+                warn!("Impossible d'exécuter claude code : {err}");
+                return String::new();
+            }
+        };
+
+        if !response.status.success() {
+            let stderr = String::from_utf8_lossy(&response.stderr).to_string();
+            warn!("Erreur lors de l'exécution de claude code : {stderr}");
+            return String::new();
+        }
+
+        let stdout = String::from_utf8_lossy(&response.stdout).to_string();
+
+        let wrapper: Value = match serde_json::from_str(&stdout) {
+            Ok(wrapper) => wrapper,
+            Err(err) => {
+                warn!("Impossible de parser la sortie de claude code : {err}");
+                return String::new();
+            }
+        };
+
+        match wrapper["result"].as_str() {
+            Some(result_text) => {
+                info!("Fiche de paie analysée avec succès.");
+                result_text.to_string()
+            }
+            None => {
+                warn!("Champ 'result' absent de la réponse de claude code.");
+                String::new()
+            }
+        }
+    }
+}

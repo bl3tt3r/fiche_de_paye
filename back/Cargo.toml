@@ -1,0 +1,19 @@
+[package]
+name = "back"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+axum = "0.8.9"                                                      # Le server HTTP
+duct = "1"                                                          # Le wrapper d'execution des commandes bash
+redb = "4.1.0"                                                      # Le moteur de la bdd
+serde = { version = "1", features = ["derive"] }                    # Le contrat de serialisation
+bitcode = "0.6"                                                     # Le serialiser en bytes de serde
+tokio = { version = "1", features = ["full"] }                      # Le runtime asynchrone
+tracing = "0.1"                                                     # Le contrat de log
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+test-log = { version = "0.2.21", default-features = false, features = [
+    "trace",
+] }
