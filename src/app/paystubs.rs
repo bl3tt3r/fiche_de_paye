@@ -1,10 +1,13 @@
-use crate::app::database::Database;
 use bitcode::{Decode, Encode};
 use std::collections::HashMap;
 use time::Timestamp;
-use uuid::Uuid;
 
 type DateTime = i64;
+
+/// Délai au-delà duquel une fiche restée en `Processing` est considérée
+/// bloquée (ex: l'application a crashé/redémarré pendant l'analyse) : voir
+/// `Paystub::is_stuck`.
+pub const ANALYSE_TIMEOUT_MS: DateTime = 10 * 60 * 1000;
 
 /// Erreurs pouvant survenir sur un `Paystub` ou son stockage.
 #[derive(Debug)]
@@ -19,30 +22,40 @@ pub enum PaystubError {
     Database(&'static str),
 }
 
-/// État d'une fiche de paie en cours de traitement.
+/// Fiche de paie en cours de traitement.
 ///
-/// Chaque variante porte les données propres à son état (ex: `error`/`retry`
-/// uniquement pour `ProcessingError`). Les transitions entre variantes se
-/// font via les méthodes `to_*` de `impl Paystub`, jamais en construisant
-/// directement une variante depuis l'extérieur (hormis `Pending` via
-/// `Paystub::pending`).
-#[derive(Encode, Decode)]
-pub enum Paystub {
+/// `file` et `since` sont communs à tous les états, d'où leur présence sur la
+/// struct plutôt que dupliqués dans chaque variante de `PaystubState`.
+/// `since` n'est pas la date de création de la fiche : c'est l'horodatage
+/// d'entrée dans l'état courant, recalculé à chaque transition (voir les
+/// méthodes `to_*`).
+#[derive(Encode, Decode, Clone)]
+pub struct Paystub {
+    pub file: String,
+    pub since: DateTime,
+    pub state: PaystubState,
+}
+
+/// État d'une fiche de paie.
+///
+/// Chaque variante ne porte que les données propres à son état (ex:
+/// `error`/`retry` uniquement pour `ProcessingError`). Les transitions entre
+/// états se font via les méthodes `to_*` de `impl Paystub`, jamais en
+/// construisant directement un `Paystub` depuis l'extérieur (hormis
+/// `Pending` via `Paystub::pending`).
+#[derive(Encode, Decode, Clone)]
+pub enum PaystubState {
     /// Fichier détecté, en attente de traitement.
-    Pending { file: String, since: DateTime },
+    Pending,
     /// Traitement du fichier en cours.
-    Processing { file: String, since: DateTime },
+    Processing,
     /// Le traitement a échoué ; `retry` compte le nombre de tentatives.
-    ProcessingError {
-        file: String,
-        since: DateTime,
-        error: String,
-        retry: u8,
-    },
+    ProcessingError { error: String, retry: u8 },
     /// Traitement terminé avec succès ; `datas` contient les valeurs extraites.
     Completed {
-        file: String,
-        since: DateTime,
+        payment_date: i32,
+        net_salary: f32,
+        infos: HashMap<String, String>,
         datas: HashMap<String, f32>,
     },
 }
@@ -50,31 +63,33 @@ pub enum Paystub {
 impl Paystub {
     /// Crée une nouvelle fiche de paie à l'état `Pending`, avec l'horodatage courant.
     pub fn pending(file: String) -> Paystub {
-        Paystub::Pending {
+        Paystub {
             file,
             since: Timestamp::now().as_milliseconds(),
+            state: PaystubState::Pending,
         }
     }
 
     /// Passe la fiche à l'état `Processing`.
     ///
-    /// Seule une fiche `Pending` peut effectuer cette transition ; toute
-    /// autre variante renvoie `PaystubError::Transition`.
+    /// Seule une fiche `Pending` peut effectuer cette transition ; tout
+    /// autre état renvoie `PaystubError::Transition`.
     pub fn to_processing(&self) -> Result<Paystub, PaystubError> {
-        match self {
-            Paystub::Pending { file, .. } => Ok(Paystub::Processing {
-                file: file.to_string(),
+        match &self.state {
+            PaystubState::Pending => Ok(Paystub {
+                file: self.file.clone(),
                 since: Timestamp::now().as_milliseconds(),
+                state: PaystubState::Processing,
             }),
-            Paystub::Processing { .. } => Err(PaystubError::Transition {
+            PaystubState::Processing => Err(PaystubError::Transition {
                 from: "Processing",
                 to: "Processing",
             }),
-            Paystub::ProcessingError { .. } => Err(PaystubError::Transition {
+            PaystubState::ProcessingError { .. } => Err(PaystubError::Transition {
                 from: "ProcessingError",
                 to: "Processing",
             }),
-            Paystub::Completed { .. } => Err(PaystubError::Transition {
+            PaystubState::Completed { .. } => Err(PaystubError::Transition {
                 from: "Completed",
                 to: "Processing",
             }),
@@ -84,27 +99,31 @@ impl Paystub {
     /// Passe la fiche à l'état `ProcessingError`.
     ///
     /// Autorisé depuis `Processing` (première erreur, `retry = 1`) et depuis
-    /// `ProcessingError` (nouvel essai, `retry` incrémenté). Toute autre
-    /// variante renvoie `PaystubError::Transition`.
+    /// `ProcessingError` (nouvel essai, `retry` incrémenté). Tout autre état
+    /// renvoie `PaystubError::Transition`.
     pub fn to_processing_error(&self, error: &str) -> Result<Paystub, PaystubError> {
-        match self {
-            Paystub::Pending { .. } => Err(PaystubError::Transition {
+        match &self.state {
+            PaystubState::Pending => Err(PaystubError::Transition {
                 from: "Pending",
                 to: "ProcessingError",
             }),
-            Paystub::Processing { file, .. } => Ok(Paystub::ProcessingError {
-                file: file.to_string(),
+            PaystubState::Processing => Ok(Paystub {
+                file: self.file.clone(),
                 since: Timestamp::now().as_milliseconds(),
-                error: error.to_string(),
-                retry: 1,
+                state: PaystubState::ProcessingError {
+                    error: error.to_string(),
+                    retry: 1,
+                },
             }),
-            Paystub::ProcessingError { file, retry, .. } => Ok(Paystub::ProcessingError {
-                file: file.to_string(),
+            PaystubState::ProcessingError { retry, .. } => Ok(Paystub {
+                file: self.file.clone(),
                 since: Timestamp::now().as_milliseconds(),
-                error: error.to_string(),
-                retry: retry + 1,
+                state: PaystubState::ProcessingError {
+                    error: error.to_string(),
+                    retry: retry + 1,
+                },
             }),
-            Paystub::Completed { .. } => Err(PaystubError::Transition {
+            PaystubState::Completed { .. } => Err(PaystubError::Transition {
                 from: "Completed",
                 to: "ProcessingError",
             }),
@@ -114,79 +133,57 @@ impl Paystub {
     /// Passe la fiche à l'état `Completed` avec les données extraites.
     ///
     /// Autorisé depuis `Processing` ou `ProcessingError` (un retry réussi
-    /// aboutit directement à `Completed`). Toute autre variante renvoie
+    /// aboutit directement à `Completed`). Tout autre état renvoie
     /// `PaystubError::Transition`.
-    pub fn to_completed(&self, datas: HashMap<String, f32>) -> Result<Paystub, PaystubError> {
-        match self {
-            Paystub::Pending { .. } => Err(PaystubError::Transition {
+    pub fn to_completed(
+        &self,
+        payment_date: i32,
+        net_salary: f32,
+        infos: HashMap<String, String>,
+        datas: HashMap<String, f32>,
+    ) -> Result<Paystub, PaystubError> {
+        match &self.state {
+            PaystubState::Pending => Err(PaystubError::Transition {
                 from: "Pending",
                 to: "Completed",
             }),
-            Paystub::Processing { file, .. } => Ok(Paystub::Completed {
-                file: file.to_string(),
+            PaystubState::Processing | PaystubState::ProcessingError { .. } => Ok(Paystub {
+                file: self.file.clone(),
                 since: Timestamp::now().as_milliseconds(),
-                datas,
+                state: PaystubState::Completed {
+                    payment_date,
+                    net_salary,
+                    infos,
+                    datas,
+                },
             }),
-            Paystub::ProcessingError { file, .. } => Ok(Paystub::Completed {
-                file: file.to_string(),
-                since: Timestamp::now().as_milliseconds(),
-                datas,
-            }),
-            Paystub::Completed { .. } => Err(PaystubError::Transition {
+            PaystubState::Completed { .. } => Err(PaystubError::Transition {
                 from: "Completed",
                 to: "Completed",
             }),
         }
     }
-}
 
-/// Accès persistant aux `Paystub`, indexés par un identifiant `Uuid` v4 généré à l'ajout.
-pub struct PaystubRepository {
-    database: Database<Paystub>,
-}
-
-impl PaystubRepository {
-    /// Ouvre (ou crée) la base de données `paystubs` sur le disque.
-    pub fn load() -> Result<PaystubRepository, PaystubError> {
-        match Database::load("paystubs") {
-            Ok(database) => Ok(PaystubRepository { database }),
-            Err(error) => Err(PaystubError::Database(error)),
-        }
+    /// `true` si la fiche est en `Processing` depuis plus de
+    /// `ANALYSE_TIMEOUT_MS` : plus aucun traitement en cours n'est censé
+    /// prendre aussi longtemps, donc soit il est réellement bloqué, soit
+    /// l'application qui le pilotait a redémarré entre-temps (ex: crash).
+    pub fn is_stuck(&self) -> bool {
+        matches!(self.state, PaystubState::Processing)
+            && Timestamp::now().as_milliseconds() - self.since > ANALYSE_TIMEOUT_MS
     }
 
-    /// Enregistre une nouvelle fiche sous un id généré, et renvoie cet id.
-    pub fn add(&mut self, paystub: Paystub) -> Result<String, PaystubError> {
-        self.database
-            .upsert(&Uuid::new_v4().to_string(), paystub)
-            .map_err(PaystubError::Database)
-    }
-
-    /// Récupère la fiche associée à `id`, ou `None` si l'id est inconnu.
-    pub fn get(&mut self, id: &str) -> Result<Option<Paystub>, PaystubError> {
-        self.database.get(id).map_err(PaystubError::Database)
-    }
-
-    /// Récupère toutes les fiches, indexées par leur id.
-    pub fn get_all(&mut self) -> Result<HashMap<String, Paystub>, PaystubError> {
-        self.database.get_all().map_err(PaystubError::Database)
-    }
-
-    /// Supprime la fiche associée à `id` et la renvoie, ou `None` si l'id est inconnu.
-    pub fn delete(&mut self, id: &str) -> Result<Option<Paystub>, PaystubError> {
-        let paystub = self.get(id)?;
-        self.database.remove(id).map_err(PaystubError::Database)?;
-        Ok(paystub)
-    }
-
-    /// Remplace la fiche associée à `id` si elle existe ; renvoie `None` sans
-    /// effet si `id` est inconnu.
-    pub fn update(&mut self, id: &str, paystub: Paystub) -> Result<Option<String>, PaystubError> {
-        if !self.database.contains(id).map_err(PaystubError::Database)? {
-            return Ok(None);
-        }
-        self.database
-            .upsert(id, paystub)
-            .map(Some)
-            .map_err(PaystubError::Database)
+    /// Fait repasser une fiche bloquée (voir `is_stuck`) en `ProcessingError`
+    /// avec un message explicite. Ce message est destiné à être transmis à
+    /// claude comme "erreur précédente" (voir la section "GESTION D'UNE
+    /// ERREUR PRÉCÉDENTE" du prompt système) : ce n'est pas un problème de
+    /// format à corriger, juste une analyse interrompue à recommencer.
+    pub fn to_timed_out(&self) -> Result<Paystub, PaystubError> {
+        self.to_processing_error(
+            "Timeout : l'analyse précédente de cette fiche a été interrompue avant de \
+             produire un résultat (plus de 10 minutes sans réponse, probablement à cause \
+             d'un redémarrage de l'application pendant le traitement). Il ne s'agit pas \
+             d'une erreur de format : relance simplement une analyse complète du document.",
+        )
     }
 }

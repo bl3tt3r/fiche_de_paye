@@ -1,15 +1,79 @@
-use crate::{app::events::Events, components::Components, event::Event};
-use eframe::egui::{self};
+use crate::{
+    app::{DATA_DIR, event::Event, events::Events, paystubs::Paystub, store::Store},
+    components::Components,
+};
+use eframe::egui::{self, Context};
+use std::{fs, path::Path};
 
 #[derive(Default)]
 pub struct Menu {}
 
 impl Components for Menu {
-    fn init(&mut self, _cc: &eframe::CreationContext<'_>) {}
+    fn init(&mut self, _cc: &eframe::CreationContext<'_>, _store: &mut Store) {}
 
-    fn update(&mut self, events: &mut Events<Event>) {}
+    fn update(&mut self, _context: &Context, events: &mut Events<Event>, store: &mut Store) {
+        if events
+            .pop(|e| match e {
+                Event::ImportPaystubs => Some(()),
+                _ => None,
+            })
+            .is_some()
+            && let Some(paths) = rfd::FileDialog::new()
+                .add_filter("PDF", &["pdf"])
+                .pick_files()
+        {
+            let paystubs_dir = Path::new(DATA_DIR).join("paystubs");
+            if let Err(error) = fs::create_dir_all(&paystubs_dir) {
+                tracing::error!(
+                    caused = %error,
+                    path = %paystubs_dir.display(),
+                    "Création du dossier des fiches de paye."
+                );
+                return;
+            }
 
-    fn show(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame, events: &mut Events<Event>) {
+            tracing::info!(count = paths.len(), "import de fiches de paie démarré");
+
+            for path in paths {
+                let Some(file_name) = path.file_name() else {
+                    tracing::warn!(path = %path.display(), "Nom de fichier invalide, fiche ignorée.");
+                    continue;
+                };
+                let destination = paystubs_dir.join(file_name);
+
+                if destination.exists() {
+                    tracing::warn!(
+                        path = %destination.display(),
+                        "Une fiche de paye porte déjà ce nom dans le dossier de données, fiche ignorée."
+                    );
+                    continue;
+                }
+
+                if let Err(error) = fs::copy(&path, &destination) {
+                    tracing::error!(
+                        caused = %error,
+                        path = %path.display(),
+                        "Copie du fichier de fiche de paye."
+                    );
+                    continue;
+                }
+
+                let id = uuid::Uuid::new_v4().to_string();
+                let paystub = Paystub::pending(destination.to_string_lossy().to_string());
+                tracing::info!(id, file = %destination.display(), "fiche de paie importée");
+                store.paystubs.insert(id, paystub);
+                store.save();
+            }
+        }
+    }
+
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        _frame: &mut eframe::Frame,
+        events: &mut Events<Event>,
+        _store: &Store,
+    ) {
         egui::Panel::top("menu")
             .frame(
                 egui::Frame::side_top_panel(ui.style())
