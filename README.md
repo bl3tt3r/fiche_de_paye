@@ -19,7 +19,9 @@ L'application s'appuie sur [Claude Code](https://docs.anthropic.com/en/docs/clau
 
 Claude Code doit donc être installé et connecté sur la machine pour que l'analyse fonctionne — l'application vérifie cette condition au démarrage.
 
-Une fois les fiches analysées, les données sont affichées sous forme de graphique, avec la possibilité de choisir les valeurs à comparer.
+>⚠️ Chaque analyse consomme des tokens de votre abonnement Claude Code. Cette consommation vous est propre et ne saurait être imputée aux auteurs du projet.
+>
+>Une fois les fiches analysées, les données sont affichées sous forme de graphique, avec la possibilité de choisir les valeurs à comparer.
 
 ## Aperçu
 
