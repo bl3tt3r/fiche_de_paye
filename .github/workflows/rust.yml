@@ -55,7 +55,7 @@ jobs:
       # Tests
       # ======================
       - name: Run tests
-        run: cargo +stable test --verbose --all-featuresd
+        run: cargo +stable test --verbose --all-features
 
       # ======================
       # Coverage (llvm-cov)

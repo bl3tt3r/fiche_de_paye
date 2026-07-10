@@ -1,13 +1,13 @@
-# Fiche de paie
+# Analyseur de fiche de paie
 
 <p align="center">
   <img alt="Rust" src="https://img.shields.io/badge/-Rust-000000?logo=rust&logoColor=white">
   <img alt="Claude Code" src="https://img.shields.io/badge/-Claude%20Code-D97757?logo=claude&logoColor=white">
-  <a href="https://github.com/bl3tt3r/fiche_de_paye/actions/workflows/rust.yml"><img alt="Rust CI" src="https://github.com/bl3tt3r/fiche_de_paye/actions/workflows/rust.yml/badge.svg"></a>
-  <a href="https://github.com/bl3tt3r/fiche_de_paye/actions/workflows/release.yml"><img alt="Release" src="https://github.com/bl3tt3r/fiche_de_paye/actions/workflows/release.yml/badge.svg"></a>
+  <a href="https://github.com/bl3tt3r/analyseur-de-fiche-de-paie/actions/workflows/rust.yml"><img alt="Rust CI" src="https://github.com/bl3tt3r/analyseur-de-fiche-de-paie/actions/workflows/rust.yml/badge.svg"></a>
+  <a href="https://github.com/bl3tt3r/analyseur-de-fiche-de-paie/actions/workflows/release.yml"><img alt="Release" src="https://github.com/bl3tt3r/analyseur-de-fiche-de-paie/actions/workflows/release.yml/badge.svg"></a>
 </p>
 
-**Fiche de paie** est une application de bureau qui automatise le suivi de vos fiches de paie grâce à l'IA, notamment [Claude Code](https://docs.anthropic.com/en/docs/claude-code) : elle analyse et extrait les données de chaque PDF (salaire net, cotisations, primes...) et permet de les comparer d'un mois sur l'autre.
+**Analyseur de fiche de paie** est une application de bureau qui automatise le suivi de vos fiches de paie grâce à l'IA, notamment [Claude Code](https://docs.anthropic.com/en/docs/claude-code) : elle analyse et extrait les données de chaque PDF (salaire net, cotisations, primes...) et permet de les comparer d'un mois sur l'autre.
 
 Initialement développée pour mon usage personnel, l'application se veut volontairement simple et se concentre sur ce périmètre, sans ambition de s'étendre au-delà.
 
@@ -33,11 +33,11 @@ Une fois les fiches analysées, les données sont affichées sous forme de graph
 
 ## Installation
 
-Télécharger le binaire correspondant à votre plateforme depuis la [page des releases](https://github.com/bl3tt3r/fiche_de_paye/releases), ou compiler depuis les sources :
+Télécharger le binaire correspondant à votre plateforme depuis la [page des releases](https://github.com/bl3tt3r/analyseur-de-fiche-de-paie/releases), ou compiler depuis les sources :
 
 ```bash
-git clone git@github.com:bl3tt3r/fiche_de_paye.git
-cd fiche_de_paye
+git clone git@github.com:bl3tt3r/analyseur-de-fiche-de-paie.git
+cd analyseur-de-fiche-de-paie
 cargo run --release
 ```
 
